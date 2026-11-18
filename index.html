@@ -327,7 +327,7 @@
 
       <section class="a-card">
         <h2>Board messages</h2>
-        <p class="a-hint">Notes, reminders and deals that each get their own page on the board. Add as many as you like and the board takes turns through them. A long one carries on over as many pages as it needs, so nothing gets cut off. A picture on its own works too: add a photo, leave the message empty, and it gets the board to itself.</p>
+        <p class="a-hint">Notes, reminders and deals that each get their own page on the board. Add as many as you like and the board takes turns through them. A long one carries on over as many pages as it needs, so nothing gets cut off. A picture on its own works too: add a photo, leave the message empty, and it fills the whole TV edge to edge.</p>
         <div class="a-field">
           <label for="msgText">Message</label>
           <textarea id="msgText" maxlength="800" placeholder="Inventory count Sunday 8 AM. Coffee is on me."></textarea>
@@ -544,6 +544,11 @@
 
   /* ================= config ================= */
   var COLS = 28, ROWS = 12;
+  /* Tiles are taller than they are wide and sit in a grid with gaps, so the
+     board's picture area is not 16:9 exactly. This is its true shape, and a
+     photo cut to it fills the screen edge to edge with nothing trimmed. */
+  var TILE_RATIO = 0.76, TILE_GAP = 0.12;
+  var BOARD_ASPECT = Math.round(1000 * (COLS + (COLS - 1) * TILE_GAP) / (ROWS / TILE_RATIO + (ROWS - 1) * TILE_GAP)) / 1000;
   var ROOT = 'sohoBoard';
   var PIN = 'SOHO2026';
   var DEFAULT_EXCLUDE = 'Mark, Jeff, Doobie';
@@ -1151,10 +1156,10 @@
 
   // Photo beside text: a photo block on the left (about square on the board) and the
   // words in a column on the right. Used by shout-outs and the board message.
-  function photoSideRows(key, top, bw, bh) {
-    var r = [];
+  function photoSideRows(key, top, bw, bh, aspect) {
+    var r = [], tail = '|' + bw + '|' + bh + (aspect ? '|' + aspect : '');
     for (var i = 0; i < ROWS; i++) r.push(blank());
-    for (var y = 0; y < bh; y++) for (var x = 0; x < bw; x++) r[top + y][1 + x] = '\u0001' + key + '|' + x + '|' + y + '|' + bw + '|' + bh;
+    for (var y = 0; y < bh; y++) for (var x = 0; x < bw; x++) r[top + y][1 + x] = '\u0001' + key + '|' + x + '|' + y + tail;
     return r;
   }
   // Shout-out sizing, shared by the board and the admin form. With a photo the words sit
@@ -1218,7 +1223,7 @@
       if (!m) return;
       var t = String(m.text || '').trim();
       if (!t && !m.photo) return;
-      out.push({ k: k, text: t, photo: m.photo || '', promo: !!m.promo, addedAt: m.addedAt || 0 });
+      out.push({ k: k, text: t, photo: m.photo || '', promo: !!m.promo, photoWide: !!m.photoWide, addedAt: m.addedAt || 0 });
     });
     out.sort(function (a, b) { return (a.addedAt || 0) - (b.addedAt || 0); });
     // A message saved before the list existed still shows until it is moved over.
@@ -1231,10 +1236,13 @@
      sized so the whole photo shows, near enough, instead of being cropped. */
   var PHOTO_ONLY = [16, 12];
   function photoOnlyPage(m) {
-    var BW = PHOTO_ONLY[0], BH = Math.min(PHOTO_ONLY[1], ROWS), r = [], x, y;
+    // Cut to the board's shape it fills every tile; otherwise it sits in the middle.
+    var wide = !!m.photoWide;
+    var BW = wide ? COLS : PHOTO_ONLY[0], BH = wide ? ROWS : Math.min(PHOTO_ONLY[1], ROWS);
+    var tail = '|' + BW + '|' + BH + (wide ? '|' + BOARD_ASPECT : ''), r = [], x, y;
     for (var i = 0; i < ROWS; i++) r.push(blank());
     var x0 = Math.floor((COLS - BW) / 2), y0 = Math.floor((ROWS - BH) / 2);
-    for (y = 0; y < BH; y++) for (x = 0; x < BW; x++) r[y0 + y][x0 + x] = '\u0001msg:' + m.k + '|' + x + '|' + y + '|' + BW + '|' + BH;
+    for (y = 0; y < BH; y++) for (x = 0; x < BW; x++) r[y0 + y][x0 + x] = '\u0001msg:' + m.k + '|' + x + '|' + y + tail;
     return framed(r);
   }
 
@@ -1246,7 +1254,7 @@
       text.split(/\n/).forEach(function (para) { L = L.concat(para.trim() ? wrap(para, tw) : ['']); });
       if (!L.length) L = [''];
       for (i = 0; i < L.length; i += 10) {
-        var r2 = photoSideRows('msg:' + m.k, 2, BW, BH);
+        var r2 = photoSideRows('msg:' + m.k, 2, BW, BH, m.photoWide ? BOARD_ASPECT : 0);
         var chunk = L.slice(i, i + 10);
         var st = 1 + Math.max(0, Math.floor((10 - chunk.length) / 2));
         chunk.forEach(function (t, n) { var c = txt(t, tw); put(r2[st + n], tc + Math.floor((tw - c.length) / 2), c); });
@@ -1917,17 +1925,21 @@
       el.firstChild.nodeValue = '';
       if (!src) { clearPhoto(el); return; }
       var cx = +p[1], cy = +p[2], bw = +p[3], bh = +p[4];
+      // Sixth field, when there is one, is the photo's shape. No field means square.
+      var A = (p.length > 5 && +p[5] > 0) ? +p[5] : 1;
       var blockW = bw * TW + (bw - 1) * TG, blockH = bh * TH + (bh - 1) * TG;
-      var S = Math.max(blockW, blockH), ox = (S - blockW) / 2, oy = (S - blockH) / 2;
+      // Grow the photo until it covers the block, keeping its shape, then centre it.
+      var sh = Math.max(blockH, blockW / A), sw = sh * A;
+      var ox = (sw - blockW) / 2, oy = (sh - blockH) / 2;
       el.style.backgroundImage = 'url("' + src + '")';
-      el.style.backgroundSize = S + 'px ' + S + 'px';
+      el.style.backgroundSize = sw + 'px ' + sh + 'px';
       el.style.backgroundPosition = (-(cx * (TW + TG) + ox)) + 'px ' + (-(cy * (TH + TG) + oy)) + 'px';
       el._p = true;
     }
     function sizeBoard() {
       var vw = window.innerWidth, vh = window.innerHeight;
       var outer = Math.round(Math.min(vw, vh) * 0.03);
-      var ratio = 0.76, gapR = 0.12;
+      var ratio = TILE_RATIO, gapR = TILE_GAP;
       var wByW = (vw - outer * 4) / (COLS + (COLS - 1) * gapR);
       var wByH = (vh - outer * 4) / (ROWS / ratio + (ROWS - 1) * gapR);
       var w = Math.max(4, Math.floor(Math.min(wByW, wByH)));
@@ -2405,7 +2417,8 @@
       $('msgList').innerHTML = msgs.length ? msgs.map(function (m) {
         var n = 0;
         try { n = msgPagesFor(m).length; } catch (e) { n = 0; }
-        var bits = [m.promo ? 'Deal board' : 'Note', n + (n === 1 ? ' board page' : ' board pages')];
+        var kind = !m.text ? (m.photoWide ? 'Picture, full board' : 'Picture') : (m.promo ? 'Deal board' : 'Note');
+        var bits = [kind, n + (n === 1 ? ' board page' : ' board pages')];
         var body = m.text ? m.text.replace(/\n/g, ' \u00B7 ') : 'Photo only';
         return '<div class="a-item">' + (m.photo ? '<img class="a-thumb" alt="" src="' + esc(m.photo) + '">' : '') +
           '<div class="grow"><div class="name">' + esc(bits.join(' \u00B7 ')) + '</div><div class="sub">' + esc(body) + '</div></div>' +
@@ -2639,7 +2652,7 @@
     /* Board messages: the box at the top writes a new one, or edits the one picked
        from the list below it. The count under the box says how many pages of the
        board the words come to, so nothing has to be guessed at or trimmed. */
-    var msgPhoto = null, msgEditKey = null;
+    var msgPhoto = null, msgPhotoWide = false, msgEditKey = null;
     function msgEditing() { return msgEditKey && (DATA.messages || {})[msgEditKey]; }
     function renderMsgPhotoRow() {
       var ph = msgPhoto || (msgEditing() ? (DATA.messages[msgEditKey].photo || '') : '');
@@ -2651,13 +2664,14 @@
     function msgCheck() {
       var v = $('msgText').value;
       var m = { k: msgEditKey || '', text: v.trim(), promo: $('msgPromo').checked,
-                photo: msgPhoto || (msgEditing() ? (DATA.messages[msgEditKey].photo || '') : '') };
+                photo: msgPhoto || (msgEditing() ? (DATA.messages[msgEditKey].photo || '') : ''),
+                photoWide: msgPhoto ? msgPhotoWide : (msgEditing() ? !!DATA.messages[msgEditKey].photoWide : false) };
       var n = 0;
       try { n = msgPagesFor(m).length; } catch (e) { n = 0; }
       $('msgCount').textContent = v.length + ' / 800' + (n ? ' \u00B7 ' + n + (n === 1 ? ' board page' : ' board pages') : '');
     }
     function resetMsgForm() {
-      msgEditKey = null; msgPhoto = null;
+      msgEditKey = null; msgPhoto = null; msgPhotoWide = false;
       $('msgText').value = ''; $('msgPromo').checked = false;
       $('msgSave').textContent = 'Add message';
       $('msgCancel').hidden = true;
@@ -2678,15 +2692,18 @@
       if (inp.id !== 'msgPhotoIn' || !inp.files || !inp.files[0]) return;
       var f = inp.files[0];
       inp.value = '';
+      // No words means the picture gets the whole TV, so it is cut to the board's
+      // own shape rather than to a square.
+      var wide = !$('msgText').value.trim();
       var opts = sidePhotoOpts('the message', 'msgCrop', function (data) {
-        if (msgEditing()) return rootRef.child('messages/' + msgEditKey + '/photo').set(data);
-        msgPhoto = data; renderMsgPhotoRow(); msgCheck();
+        if (msgEditing()) return rootRef.child('messages/' + msgEditKey).update({ photo: data, photoWide: wide });
+        msgPhoto = data; msgPhotoWide = wide; renderMsgPhotoRow(); msgCheck();
         return Promise.resolve();
       });
-      // With no words, the picture gets the whole board, so show that bigger frame.
-      if (!$('msgText').value.trim()) {
-        opts.grid = PHOTO_ONLY;
-        opts.hint = 'With no message typed, this picture gets the board to itself. Drag and zoom to frame it. The lines show the board tiles.';
+      if (wide) {
+        opts.grid = [COLS, ROWS];
+        opts.aspect = BOARD_ASPECT;
+        opts.hint = 'With no message typed, this picture gets the whole board. The frame below is the exact shape of the TV, so fill it corner to corner and nothing is cut off. The lines show the board tiles.';
       }
       // Editing writes the photo straight through; a new message only holds on to
       // it until Add message is pressed, so don't call that saved.
@@ -2751,7 +2768,7 @@
       var hasPhoto = !!(msgPhoto || (msgEditing() && DATA.messages[msgEditKey].photo));
       if (!text && !hasPhoto) { toast('Write a message or add a photo first.', true); return; }
       var rec = { text: text, promo: $('msgPromo').checked };
-      if (msgPhoto) rec.photo = msgPhoto;
+      if (msgPhoto) { rec.photo = msgPhoto; rec.photoWide = msgPhotoWide; }
       var editing = !!msgEditing();
       var done = editing ? rootRef.child('messages/' + msgEditKey).update(rec)
                          : (rec.addedAt = Date.now(), rootRef.child('messages').push(rec));
@@ -2968,9 +2985,14 @@
         var who = opts.who || ((DATA.team || {})[k] || {}).name || 'their';
         var GX = (opts.grid || [15, 12])[0], GY = (opts.grid || [15, 12])[1];
         var hint = opts.hint ? esc(opts.hint) : 'Drag the photo and zoom in so ' + esc(who) + "'s face fills most of the square. The lines show the board's tiles.";
-        var minZ = opts.fit ? Math.min(img.naturalWidth, img.naturalHeight) / Math.max(img.naturalWidth, img.naturalHeight) : 1;
+        // The frame is square unless the caller asks for another shape, as the
+        // full-screen board picture does.
+        var aspect = opts.aspect || 1, wideFrame = aspect > 1.2;
+        var CVW = 560, CVH = Math.round(560 / aspect);
+        function fitZoom(w, h) { return Math.min(CVW / w, CVH / h) / Math.max(CVW / w, CVH / h); }
+        var minZ = opts.fit ? fitZoom(img.naturalWidth, img.naturalHeight) : 1;
         box.innerHTML = '<div class="a-crop"><p class="a-hint" style="margin:0">' + hint + '</p>' +
-          '<canvas id="cropCv" width="560" height="560"></canvas>' +
+          '<canvas id="cropCv" width="' + CVW + '" height="' + CVH + '"' + (wideFrame ? ' style="width:520px"' : '') + '></canvas>' +
           '<label for="cropZoom" class="a-hint" style="margin:0">Zoom</label><input id="cropZoom" type="range" min="' + minZ + '" max="6" step="0.01" value="' + (opts.startCover ? 1 : minZ) + '">' +
           '<div class="a-row"><button class="a-btn small" type="button" id="cropRot">Rotate</button><button class="a-btn small" type="button" id="cropReset">Reset edits</button></div>' +
           '<label for="cropBri" class="a-hint" style="margin:0">Brightness</label><input id="cropBri" type="range" min="0.5" max="1.6" step="0.01" value="1.06" style="width:280px;max-width:100%">' +
@@ -2978,9 +3000,9 @@
           '<label for="cropSat" class="a-hint" style="margin:0">Color</label><input id="cropSat" type="range" min="0" max="2" step="0.01" value="1.1" style="width:280px;max-width:100%">' +
           '<div class="a-row"><button class="a-btn primary" type="button" id="cropSave">' + esc(opts.saveLabel || 'Save photo') + '</button><button class="a-btn" type="button" id="cropCancel">Cancel</button></div></div>';
         box.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        var cv = $('cropCv'), V = cv.width, W = img.naturalWidth, H = img.naturalHeight, src = img, rot = 0;
+        var cv = $('cropCv'), W = img.naturalWidth, H = img.naturalHeight, src = img, rot = 0;
         var bri = 1.06, con = 1.08, sat = 1.1;
-        var base = Math.max(V / W, V / H), zoom = opts.startCover ? 1 : minZ, cx = W / 2, cy = opts.fit ? H / 2 : H * 0.4, drag = null;
+        var base = Math.max(CVW / W, CVH / H), zoom = opts.startCover ? 1 : minZ, cx = W / 2, cy = opts.fit ? H / 2 : H * 0.4, drag = null;
         // Fit mode: fill the empty edges with the photo's own corner color (usually white).
         var bg = '#000';
         if (opts.fit) {
@@ -2991,29 +3013,29 @@
           } catch (e) { bg = '#fff'; }
         }
         function clamp() {
-          var half = V / 2 / (base * zoom);
-          cx = W / 2 <= half ? W / 2 : Math.min(Math.max(cx, half), W - half);
-          cy = H / 2 <= half ? H / 2 : Math.min(Math.max(cy, half), H - half);
+          var halfW = CVW / 2 / (base * zoom), halfH = CVH / 2 / (base * zoom);
+          cx = W / 2 <= halfW ? W / 2 : Math.min(Math.max(cx, halfW), W - halfW);
+          cy = H / 2 <= halfH ? H / 2 : Math.min(Math.max(cy, halfH), H - halfH);
         }
-        function paint(c, size) {
-          var g = c.getContext('2d'), sc = base * zoom * size / V;
-          g.fillStyle = bg; g.fillRect(0, 0, size, size);
+        function paint(c, w, h) {
+          var g = c.getContext('2d'), sc = base * zoom * w / CVW;
+          g.fillStyle = bg; g.fillRect(0, 0, w, h);
           try { g.filter = 'brightness(' + bri + ') contrast(' + con + ') saturate(' + sat + ')'; } catch (e) { }
-          g.drawImage(src, size / 2 - cx * sc, size / 2 - cy * sc, W * sc, H * sc);
+          g.drawImage(src, w / 2 - cx * sc, h / 2 - cy * sc, W * sc, H * sc);
           try { g.filter = 'none'; } catch (e) { }
         }
         function render() {
-          clamp(); paint(cv, V);
+          clamp(); paint(cv, CVW, CVH);
           var g = cv.getContext('2d');
-          g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = 2;
-          for (var i = 1; i < GX; i++) { var x = Math.round(i * V / GX); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, V); g.stroke(); }
-          for (var j = 1; j < GY; j++) { var y = Math.round(j * V / GY); g.beginPath(); g.moveTo(0, y); g.lineTo(V, y); g.stroke(); }
+          g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = GX > 20 ? 1 : 2;
+          for (var i = 1; i < GX; i++) { var x = Math.round(i * CVW / GX); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, CVH); g.stroke(); }
+          for (var j = 1; j < GY; j++) { var y = Math.round(j * CVH / GY); g.beginPath(); g.moveTo(0, y); g.lineTo(CVW, y); g.stroke(); }
         }
         render();
         cv.addEventListener('pointerdown', function (e) { drag = { x: e.clientX, y: e.clientY, cx: cx, cy: cy }; try { cv.setPointerCapture(e.pointerId); } catch (er) { } });
         cv.addEventListener('pointermove', function (e) {
           if (!drag) return;
-          var k2 = V / cv.clientWidth / (base * zoom);
+          var k2 = CVW / cv.clientWidth / (base * zoom);
           cx = drag.cx - (e.clientX - drag.x) * k2;
           cy = drag.cy - (e.clientY - drag.y) * k2;
           render();
@@ -3035,8 +3057,8 @@
             g.translate(c.width / 2, c.height / 2); g.rotate(rot * Math.PI / 2); g.drawImage(img, -iw / 2, -ih / 2);
             src = c; W = c.width; H = c.height;
           }
-          base = Math.max(V / W, V / H);
-          minZ = opts.fit ? Math.min(W, H) / Math.max(W, H) : 1;
+          base = Math.max(CVW / W, CVH / H);
+          minZ = opts.fit ? fitZoom(W, H) : 1;
           zoom = opts.startCover ? 1 : minZ; cx = W / 2; cy = opts.fit ? H / 2 : H * 0.4;
           $('cropZoom').min = minZ; $('cropZoom').value = zoom;
         }
@@ -3052,9 +3074,13 @@
         function close() { box.innerHTML = ''; URL.revokeObjectURL(url); }
         $('cropCancel').addEventListener('click', close);
         $('cropSave').addEventListener('click', function () {
-          var out = document.createElement('canvas'); out.width = out.height = 480;
-          clamp(); paint(out, 480);
-          var data = out.toDataURL('image/jpeg', 0.85);
+          // A full-screen picture is saved wider and a little taller, since it has
+          // the whole TV to cover rather than a small block of tiles.
+          var out = document.createElement('canvas');
+          out.height = wideFrame ? 640 : 480;
+          out.width = Math.round(out.height * aspect);
+          clamp(); paint(out, out.width, out.height);
+          var data = out.toDataURL('image/jpeg', wideFrame ? 0.82 : 0.85);
           if (opts.savingToast !== '') toast(opts.savingToast || 'Saving photo…');
           (opts.save ? opts.save(data) : rootRef.child('photos/' + k).set(data))
             .then(function () { toast(opts.savedToast || 'Photo saved.'); close(); })

@@ -327,7 +327,7 @@
 
       <section class="a-card">
         <h2>Board messages</h2>
-        <p class="a-hint">Notes, reminders and deals that each get their own page on the board. Add as many as you like and the board takes turns through them. A long one carries on over as many pages as it needs, so nothing gets cut off.</p>
+        <p class="a-hint">Notes, reminders and deals that each get their own page on the board. Add as many as you like and the board takes turns through them. A long one carries on over as many pages as it needs, so nothing gets cut off. A picture on its own works too: add a photo, leave the message empty, and it gets the board to itself.</p>
         <div class="a-field">
           <label for="msgText">Message</label>
           <textarea id="msgText" maxlength="800" placeholder="Inventory count Sunday 8 AM. Coffee is on me."></textarea>
@@ -1227,13 +1227,14 @@
     return out;
   }
 
-  // Photo on its own, filling the middle of the board.
+  /* A picture on its own. The block runs the full height of the board and is
+     sized so the whole photo shows, near enough, instead of being cropped. */
+  var PHOTO_ONLY = [16, 12];
   function photoOnlyPage(m) {
-    var BW = 16, BH = ROWS - 2, r = [], x, y;
+    var BW = PHOTO_ONLY[0], BH = Math.min(PHOTO_ONLY[1], ROWS), r = [], x, y;
     for (var i = 0; i < ROWS; i++) r.push(blank());
-    var x0 = Math.floor((COLS - BW) / 2);
-    for (y = 0; y < BH; y++) for (x = 0; x < BW; x++) r[1 + y][x0 + x] = '\u0001msg:' + m.k + '|' + x + '|' + y + '|' + BW + '|' + BH;
-    r[0] = edges('B'); r[ROWS - 1] = edges('B');
+    var x0 = Math.floor((COLS - BW) / 2), y0 = Math.floor((ROWS - BH) / 2);
+    for (y = 0; y < BH; y++) for (x = 0; x < BW; x++) r[y0 + y][x0 + x] = '\u0001msg:' + m.k + '|' + x + '|' + y + '|' + BW + '|' + BH;
     return framed(r);
   }
 
@@ -2676,11 +2677,17 @@
       if (inp.id !== 'msgPhotoIn' || !inp.files || !inp.files[0]) return;
       var f = inp.files[0];
       inp.value = '';
-      openCropper('msg', f, sidePhotoOpts('the message', 'msgCrop', function (data) {
+      var opts = sidePhotoOpts('the message', 'msgCrop', function (data) {
         if (msgEditing()) return rootRef.child('messages/' + msgEditKey + '/photo').set(data);
         msgPhoto = data; renderMsgPhotoRow(); msgCheck();
         return Promise.resolve();
-      }));
+      });
+      // With no words, the picture gets the whole board, so show that bigger frame.
+      if (!$('msgText').value.trim()) {
+        opts.grid = PHOTO_ONLY;
+        opts.hint = 'With no message typed, this picture gets the board to itself. Drag and zoom to frame it. The lines show the board tiles.';
+      }
+      openCropper('msg', f, opts);
     });
     $('msgPhotoRow').addEventListener('click', function (ev) {
       var b = ev.target.closest && ev.target.closest('#msgPhotoDel');
@@ -2734,7 +2741,7 @@
     $('msgSave').addEventListener('click', function () {
       var text = $('msgText').value.trim();
       var hasPhoto = !!(msgPhoto || (msgEditing() && DATA.messages[msgEditKey].photo));
-      if (!text && !hasPhoto) { toast('Write a message first.', true); return; }
+      if (!text && !hasPhoto) { toast('Write a message or add a photo first.', true); return; }
       var rec = { text: text, promo: $('msgPromo').checked };
       if (msgPhoto) rec.photo = msgPhoto;
       var editing = !!msgEditing();

@@ -171,6 +171,16 @@
     background-size: 82% auto, 100% 100%; background-position: center, center; background-repeat: no-repeat, no-repeat;
   }
   .t.e { font-size: calc(var(--fs, 20px) * 1.18) !important; }
+  /* Deal boards: letters that carry a color, and dark letters on a color chip. */
+  .t.tR { color: #FF6F63; }
+  .t.tO { color: #FF9A3D; }
+  .t.tY { color: #FFD43B; }
+  .t.tG { color: #3CCB6E; }
+  .t.tB { color: #5B9BFF; }
+  .t.tV { color: #B07BE0; }
+  .t.tW { color: var(--char); }
+  .t.tK { color: var(--char); }
+  .t.ink { color: #0A0A0A; }
   /* Photo tiles: each tile shows its own slice of a photo, so the picture flips in tile by tile. */
   .t.p { background-color: #111; background-repeat: no-repeat; }
   .t.p::after { background: rgba(0, 0, 0, 0.18); }
@@ -316,22 +326,29 @@
       </section>
 
       <section class="a-card">
-        <h2>Board message</h2>
-        <p class="a-hint">A free message that gets its own panel, like a team note or reminder. Leave it empty to skip the panel.</p>
+        <h2>Board messages</h2>
+        <p class="a-hint">Notes, reminders and deals that each get their own page on the board. Add as many as you like and the board takes turns through them. A long one carries on over as many pages as it needs, so nothing gets cut off.</p>
         <div class="a-field">
           <label for="msgText">Message</label>
-          <textarea id="msgText" maxlength="200" placeholder="Inventory count Sunday 8 AM. Coffee is on me."></textarea>
-          <span class="a-count" id="msgCount">0 / 200</span>
+          <textarea id="msgText" maxlength="800" placeholder="Inventory count Sunday 8 AM. Coffee is on me."></textarea>
+          <span class="a-count" id="msgCount">0 / 800</span>
         </div>
-        <div class="a-row">
-          <button class="a-btn primary" type="button" id="msgSave">Save message</button>
-          <button class="a-btn" type="button" id="msgClear">Clear</button>
-        </div>
+        <label class="a-toggle" for="msgPromo" style="max-width:460px">
+          <input type="checkbox" id="msgPromo">
+          Deal board style
+        </label>
+        <p class="a-hint">Deal board style puts it up like a promo board: first line the dates, second line the headline in a green bar, then one deal per line after that. Put a colon after the category and the offer turns green, like <b>Flower: Buy 3, get 1 free.</b> Leave it off for an ordinary note.</p>
         <div class="a-label">Photo (optional)</div>
         <div class="a-row" id="msgPhotoRow">
           <label class="a-btn">Add photo<input type="file" accept="image/*" id="msgPhotoIn" hidden></label>
         </div>
         <div id="msgCrop"></div>
+        <div class="a-row">
+          <button class="a-btn primary" type="button" id="msgSave">Add message</button>
+          <button class="a-btn" type="button" id="msgCancel" hidden>Cancel edit</button>
+          <button class="a-btn" type="button" id="msgClear">Clear</button>
+        </div>
+        <div class="a-list" id="msgList"></div>
       </section>
 
       <section class="a-card">
@@ -701,7 +718,7 @@
     ['spotlight', 'Product spotlight'],
     ['celebrate', 'Birthdays and anniversaries'],
     ['trivia', 'Trivia'],
-    ['message', 'Board message'],
+    ['message', 'Board messages'],
     ['weather', 'SoHo weather'],
     ['records', 'Record board'],
     ['countdown', 'Green Wednesday countdown'],
@@ -840,6 +857,54 @@
     return r;
   }
   function edges(code) { var r = blank(); r[0] = '{' + code + '}'; r[COLS - 1] = '{' + code + '}'; return r; }
+  /* Deal-board tiles. Two kinds beyond the plain flap and the solid color chip:
+     "\u0002<code><char>" is a dark letter sitting on a color chip, for a headline
+     bar, and "\u0003<code><char>" is a colored letter on a normal flap, for the
+     offer half of a deal line. */
+  function chipChar(code, ch) { return '\u0002' + code + ch; }
+  function colorChar(code, ch) { return '\u0003' + code + ch; }
+  function bannerRow(s, code, leaves) {
+    var r = blank();
+    var c = txt(s, COLS - 6);
+    var start = Math.floor((COLS - c.length) / 2);
+    var from = Math.max(2, start - 2), to = Math.min(COLS - 3, start + c.length + 1);
+    for (var i = from; i <= to; i++) r[i] = chipChar(code, ' ');
+    for (var j = 0; j < c.length; j++) r[start + j] = chipChar(code, c[j]);
+    if (leaves) { r[0] = '\uD83C\uDF3F'; r[COLS - 1] = '\uD83C\uDF3F'; }
+    return r;
+  }
+  // Lay a run of words onto a row, each run either plain or in a color.
+  function putRuns(row, col, runs) {
+    var c = col;
+    runs.forEach(function (run) {
+      for (var i = 0; i < run.g.length; i++) {
+        if (c >= 0 && c < COLS) row[c] = run.c ? colorChar(run.c, run.g[i]) : run.g[i];
+        c++;
+      }
+    });
+    return row;
+  }
+  // Word wrap that keeps each word's color, so a line can be half white half green.
+  function wrapRuns(parts, width) {
+    var words = [];
+    parts.forEach(function (p) {
+      if (!p || !p.text) return;
+      String(p.text).replace(/\s+/g, ' ').trim().split(' ').forEach(function (w) {
+        if (!w) return;
+        var g = clean(w);
+        while (g.length > width) { words.push({ g: g.slice(0, width), c: p.c }); g = g.slice(width); }
+        if (g.length) words.push({ g: g, c: p.c });
+      });
+    });
+    var lines = [], cur = [], len = 0;
+    words.forEach(function (w) {
+      if (len && len + 1 + w.g.length > width) { lines.push(cur); cur = []; len = 0; }
+      if (len) { cur.push({ g: [' '], c: null }); len++; }
+      cur.push(w); len += w.g.length;
+    });
+    if (cur.length) lines.push(cur);
+    return lines;
+  }
   function bar(pct) {
     var r = blank();
     var label = txt(Math.round(pct * 100) + '%');
@@ -1142,36 +1207,148 @@
     return r;
   }
 
-  function messagePanel() {
-    var m = String(S().message || '').trim();
-    var mp = S().messagePhoto;
-    if (!m && !mp) return null;
-    if (mp && !m) {
-      var BW0 = 16, BH0 = ROWS - 2, r0 = [];
-      for (var i0 = 0; i0 < ROWS; i0++) r0.push(blank());
-      var x0 = Math.floor((COLS - BW0) / 2);
-      for (var y = 0; y < BH0; y++) for (var x = 0; x < BW0; x++) r0[1 + y][x0 + x] = '\u0001msg:|' + x + '|' + y + '|' + BW0 + '|' + BH0;
-      r0[0] = edges('B'); r0[ROWS - 1] = edges('B');
-      return framed(r0);
-    }
-    if (mp) {
-      var BW = 10, BH = 8, r2 = photoSideRows('msg:', 2, BW, BH);
-      var tc = BW + 2, tw = COLS - tc - 1, L = [];
-      m.split(/\n/).forEach(function (para) { L = L.concat(para.trim() ? wrap(para, tw) : ['']); });
-      L = fitLines(L, 10, tw);
-      var st = 1 + Math.max(0, Math.floor((10 - L.length) / 2));
-      L.forEach(function (t, i) { var c = txt(t, tw); put(r2[st + i], tc + Math.floor((tw - c.length) / 2), c); });
-      r2[0] = edges('B'); r2[ROWS - 1] = edges('B');
-      return framed(r2);
+  /* ---------- board messages ----------
+     Any number of them, each taking as many board pages as its words need. The
+     board shows a message's pages one after another, then moves on. */
+  function messageList() {
+    var out = [];
+    var M = DATA.messages || {};
+    Object.keys(M).forEach(function (k) {
+      var m = M[k];
+      if (!m) return;
+      var t = String(m.text || '').trim();
+      if (!t && !m.photo) return;
+      out.push({ k: k, text: t, photo: m.photo || '', promo: !!m.promo, addedAt: m.addedAt || 0 });
+    });
+    out.sort(function (a, b) { return (a.addedAt || 0) - (b.addedAt || 0); });
+    // A message saved before the list existed still shows until it is moved over.
+    var legacy = String(S().message || '').trim();
+    if (legacy || S().messagePhoto) out.unshift({ k: '', text: legacy, photo: S().messagePhoto || '', promo: false, addedAt: 0 });
+    return out;
+  }
+
+  // Photo on its own, filling the middle of the board.
+  function photoOnlyPage(m) {
+    var BW = 16, BH = ROWS - 2, r = [], x, y;
+    for (var i = 0; i < ROWS; i++) r.push(blank());
+    var x0 = Math.floor((COLS - BW) / 2);
+    for (y = 0; y < BH; y++) for (x = 0; x < BW; x++) r[1 + y][x0 + x] = '\u0001msg:' + m.k + '|' + x + '|' + y + '|' + BW + '|' + BH;
+    r[0] = edges('B'); r[ROWS - 1] = edges('B');
+    return framed(r);
+  }
+
+  // Plain message: centered words, and the photo down the left when there is one.
+  function plainPages(m) {
+    var text = String(m.text || '').trim(), pages = [], i;
+    if (m.photo) {
+      var BW = 10, BH = 8, tc = BW + 2, tw = COLS - tc - 1, L = [];
+      text.split(/\n/).forEach(function (para) { L = L.concat(para.trim() ? wrap(para, tw) : ['']); });
+      if (!L.length) L = [''];
+      for (i = 0; i < L.length; i += 10) {
+        var r2 = photoSideRows('msg:' + m.k, 2, BW, BH);
+        var chunk = L.slice(i, i + 10);
+        var st = 1 + Math.max(0, Math.floor((10 - chunk.length) / 2));
+        chunk.forEach(function (t, n) { var c = txt(t, tw); put(r2[st + n], tc + Math.floor((tw - c.length) / 2), c); });
+        r2[0] = edges('B'); r2[ROWS - 1] = edges('B');
+        pages.push(framed(r2));
+      }
+      return pages;
     }
     var lines = [];
-    m.split(/\n/).forEach(function (para) { lines = lines.concat(para.trim() ? wrap(para, COLS - 2) : ['']); });
-    lines = fitLines(lines, 10, COLS - 2);
-    var r = [edges('B')].concat(middle(lines.map(center), 1, 10));
-    while (r.length < ROWS - 1) r.push(blank());
-    r = r.slice(0, ROWS - 1);
-    r.push(edges('B'));
-    return framed(r);
+    text.split(/\n/).forEach(function (para) { lines = lines.concat(para.trim() ? wrap(para, COLS - 2) : ['']); });
+    if (!lines.length) lines = [''];
+    for (i = 0; i < lines.length; i += 10) {
+      var r = [edges('B')].concat(middle(lines.slice(i, i + 10).map(center), 1, 10));
+      while (r.length < ROWS - 1) r.push(blank());
+      r = r.slice(0, ROWS - 1);
+      r.push(edges('B'));
+      pages.push(framed(r));
+    }
+    return pages;
+  }
+
+  /* Deal board: first line the dates, second line the headline in a green bar,
+     then one deal per line. The category before the colon stays white and the
+     offer after it turns green, the way a promo board reads across the room. */
+  function promoParts(text) {
+    var head = [], deals = [];
+    String(text || '').split(/\n/).forEach(function (l) {
+      l = l.trim();
+      if (!l) return;
+      if (head.length < 2) head.push(l); else deals.push(l);
+    });
+    return { when: head[0] || '', banner: head[1] || '', deals: deals };
+  }
+  function promoPages(m) {
+    var b = promoParts(m.text), W = COLS - 4, blocks = [];
+    b.deals.forEach(function (d) {
+      var label = '', offer = d;
+      var byColon = d.match(/^([^:]{1,24}):\s*([\s\S]+)$/);
+      if (byColon) { label = byColon[1].trim(); offer = byColon[2].trim(); }
+      else {
+        var byDash = d.match(/^(.{1,24}?)\s+[-\u2013\u2014]\s+([\s\S]+)$/);
+        if (byDash) { label = byDash[1].trim(); offer = byDash[2].trim(); }
+      }
+      var parts = label ? [{ text: label + ':', c: null }, { text: offer, c: 'G' }] : [{ text: offer, c: null }];
+      var rows = [];
+      wrapRuns(parts, W).forEach(function (runs, i) {
+        rows.push(putRuns(blank(), i === 0 ? 1 : 3, runs));
+      });
+      if (rows.length) blocks.push(rows);
+    });
+    var head = [];
+    if (b.when) head.push(center(b.when));
+    if (b.banner) head.push(bannerRow(b.banner, 'G', true));
+    if (head.length) head.push(blank());
+    var per = Math.max(1, ROWS - 1 - head.length);
+    // Keep a deal whole on one page where it fits; a very long one carries over.
+    var groups = [], cur = [];
+    blocks.forEach(function (bl) {
+      if (bl.length > per) {
+        if (cur.length) { groups.push(cur); cur = []; }
+        for (var j = 0; j < bl.length; j += per) groups.push(bl.slice(j, j + per));
+        return;
+      }
+      if (cur.length + bl.length > per) { groups.push(cur); cur = []; }
+      cur = cur.concat(bl);
+    });
+    if (cur.length || !groups.length) groups.push(cur);
+    return groups.map(function (g) {
+      var r = head.concat(g);
+      while (r.length < ROWS - 1) r.push(blank());
+      r = r.slice(0, ROWS - 1);
+      r.push(edges('G'));
+      return framed(r);
+    });
+  }
+
+  function msgPagesFor(m) {
+    if (!String(m.text || '').trim()) return m.photo ? [photoOnlyPage(m)] : [];
+    return m.promo ? promoPages(m) : plainPages(m);
+  }
+  var msgCursor = 0;
+  function messagePages() {
+    var pages = [];
+    messageList().forEach(function (m) {
+      var ps = msgPagesFor(m);
+      ps.forEach(function (p, i) { pages.push({ rows: p, last: i === ps.length - 1 }); });
+    });
+    return pages;
+  }
+  function messagePanel() {
+    var pages = messagePages();
+    if (!pages.length) return null;
+    if (msgCursor >= pages.length) msgCursor = 0;
+    return pages[msgCursor].rows;
+  }
+  // True when the message on screen has another page still to come.
+  function msgHasMore() {
+    var pages = messagePages();
+    return !!(pages.length && msgCursor < pages.length && !pages[msgCursor].last);
+  }
+  function msgAdvance() {
+    var pages = messagePages();
+    msgCursor = pages.length ? (msgCursor + 1) % pages.length : 0;
   }
 
   var BIG = {
@@ -1327,7 +1504,12 @@
     if (String(key).indexOf('bday:') === 0) { var bc = (DATA.bdayCelebs || {})[key.slice(5)]; return bc && bc.photo; }
     if (String(key).indexOf('spot:') === 0) { var sp = (DATA.spotlights || {})[key.slice(5)]; return sp && sp.photo; }
     if (String(key).indexOf('shout:') === 0) { var so = (DATA.shoutouts || {})[key.slice(6)]; return so && so.photo; }
-    if (String(key).indexOf('msg:') === 0) return S().messagePhoto;
+    if (String(key).indexOf('msg:') === 0) {
+      var mk2 = key.slice(4);
+      if (!mk2) return S().messagePhoto;
+      var mm2 = (DATA.messages || {})[mk2];
+      return mm2 && mm2.photo;
+    }
     return (DATA.photos || {})[key];
   }
 
@@ -1778,6 +1960,12 @@
       var el = tiles[i];
       if (cell.charAt(0) === '\u0001') { photoTile(el, cell); return; }
       clearPhoto(el);
+      if (cell.charAt(0) === '\u0002' || cell.charAt(0) === '\u0003') {
+        var onChip = cell.charAt(0) === '\u0002', ch = cell.slice(2);
+        el.className = 't ' + (onChip ? 'c' + cell.charAt(1) + ' ink' : 't' + cell.charAt(1)) + (flash ? ' f' : '');
+        el.firstChild.nodeValue = ch === ' ' ? '' : ch;
+        return;
+      }
       if (cell.charAt(0) === '{') {
         el.className = 't c' + cell.charAt(1) + (flash ? ' f' : '');
         el.firstChild.nodeValue = '';
@@ -1908,14 +2096,33 @@
       if (active) requestAnimationFrame(tick); else running = false;
     }
 
-    var idx = 0, cycle = 0, currentName = null, timer = null;
+    var idx = 0, cycle = 0, currentName = null, timer = null, holdMsg = false;
     function rotateMs() { return Math.max(6, Math.min(90, num(S().rotateSecs, 15))) * 1000; }
+    // A message longer than one page keeps the board for its next page, so the
+    // whole thing reads through in one go instead of a page per loop.
+    var msgShownAt = 0;
+    function showMessage() {
+      var pages = [];
+      try { pages = messagePages(); } catch (e) { pages = []; }
+      if (!pages.length) { holdMsg = false; return false; }
+      if (msgCursor >= pages.length) msgCursor = 0;
+      msgShownAt = msgCursor;
+      currentName = 'message';
+      show(pages[msgCursor].rows);
+      holdMsg = !pages[msgCursor].last;
+      msgCursor = (msgCursor + 1) % pages.length;
+      schedule();
+      return true;
+    }
     function next() {
       if (!loaded) { show(loadingPanel()); schedule(); return; }
+      if (holdMsg && panelOn('message') && showMessage()) return;
+      holdMsg = false;
       for (var tries = 0; tries < ORDER.length; tries++) {
         var name = ORDER[idx];
         idx = (idx + 1) % ORDER.length;
         if (idx === 0) cycle++;
+        if (name === 'message') { if (panelOn('message') && showMessage()) return; continue; }
         var p = null;
         try { p = build(name, cycle); } catch (e) { p = null; }
         if (p) { currentName = name; show(p); schedule(); return; }
@@ -1927,6 +2134,13 @@
     function schedule() { clearTimeout(timer); timer = setTimeout(next, rotateMs()); }
     function refreshCurrent() {
       if (!currentName) { next(); return; }
+      if (currentName === 'message') {
+        var pages = [];
+        try { pages = messagePages(); } catch (e) { pages = []; }
+        if (!pages.length) { next(); return; }
+        show(pages[Math.min(msgShownAt, pages.length - 1)].rows);
+        return;
+      }
       var p = null;
       try { p = build(currentName, cycle); } catch (e) { p = null; }
       if (p) show(p); else next();
@@ -2120,7 +2334,11 @@
       counter('shoutText', 'shoutCount', 220);
       ['shoutText', 'shoutTo', 'shoutFrom'].forEach(function (id) { $(id).addEventListener('input', shoutCheck); });
       shoutCheck();
-      counter('msgText', 'msgCount', 200);
+      ['msgText', 'msgPromo'].forEach(function (id) {
+        $(id).addEventListener('input', msgCheck);
+        $(id).addEventListener('change', msgCheck);
+      });
+      msgCheck();
       if (!rootRef) { toast("Couldn't reach the database. Check the internet connection.", true); return; }
       db.ref('.info/connected').on('value', function (snap) {
         var on = !!snap.val();
@@ -2131,7 +2349,7 @@
       rootRef.on('value', function (snap) {
         DATA = snap.val() || {};
         loaded = true;
-        if (firstLoad) { fillForms(); firstLoad = false; }
+        if (firstLoad) { fillForms(); migrateMessage(); firstLoad = false; }
         renderLists();
       }, function (err) { toast(failText(err), true); });
     }
@@ -2144,13 +2362,13 @@
       $('minDay').value = s.minTxnDay || '';
       $('minMonth').value = s.minTxnMonth || '';
       $('exclude').value = s.exclude == null ? DEFAULT_EXCLUDE : s.exclude;
-      $('msgText').value = s.message || '';
+
       $('builtinTrivia').checked = s.builtinTrivia !== false;
       $('flapSound').checked = s.sound !== false;
       $('soundVol').value = String(s.soundVol || 0.35);
       $('misReset').value = s.misdispenseReset || '';
       $('misRecord').value = s.misRecord || '';
-      $('msgText').dispatchEvent(new Event('input'));
+      msgCheck();
     }
 
     function renderLists() {
@@ -2180,11 +2398,19 @@
           '<button class="a-btn small danger" type="button" data-del="quotes/' + esc(q._k) + '">Delete</button></div>';
       }).join('') : '<p class="a-empty">No quotes yet.</p>';
 
-      // Board message photo
-      var mph = S().messagePhoto;
-      $('msgPhotoRow').innerHTML = (mph ? '<img class="a-thumb" alt="" src="' + esc(mph) + '">' : '') +
-        '<label class="a-btn">' + (mph ? 'Change photo' : 'Add photo') + '<input type="file" accept="image/*" id="msgPhotoIn" hidden></label>' +
-        (mph ? '<button class="a-btn" type="button" id="msgPhotoDel">Remove photo</button>' : '');
+      // Board messages
+      renderMsgPhotoRow();
+      var msgs = messageList();
+      $('msgList').innerHTML = msgs.length ? msgs.map(function (m) {
+        var n = 0;
+        try { n = msgPagesFor(m).length; } catch (e) { n = 0; }
+        var bits = [m.promo ? 'Deal board' : 'Note', n + (n === 1 ? ' board page' : ' board pages')];
+        var body = m.text ? m.text.replace(/\n/g, ' \u00B7 ') : 'Photo only';
+        return '<div class="a-item">' + (m.photo ? '<img class="a-thumb" alt="" src="' + esc(m.photo) + '">' : '') +
+          '<div class="grow"><div class="name">' + esc(bits.join(' \u00B7 ')) + '</div><div class="sub">' + esc(body) + '</div></div>' +
+          (m.k ? '<button class="a-btn small" type="button" data-msgedit="' + esc(m.k) + '">Edit</button>' : '') +
+          '<button class="a-btn small danger" type="button" data-msgdel="' + esc(m.k) + '">Delete</button></div>';
+      }).join('') : '<p class="a-empty">No messages yet.</p>';
 
       // Shout-outs
       var ss = Object.keys(DATA.shoutouts || {}).map(function (k) { var s = DATA.shoutouts[k]; s._k = k; return s; })
@@ -2409,21 +2635,87 @@
       rootRef.child('shoutouts/' + b.getAttribute('data-shoutunphoto') + '/photo').remove()
         .then(function () { toast('Photo removed.'); }).catch(function (err) { toast(failText(err), true); });
     });
+    /* Board messages: the box at the top writes a new one, or edits the one picked
+       from the list below it. The count under the box says how many pages of the
+       board the words come to, so nothing has to be guessed at or trimmed. */
+    var msgPhoto = null, msgEditKey = null;
+    function msgEditing() { return msgEditKey && (DATA.messages || {})[msgEditKey]; }
+    function renderMsgPhotoRow() {
+      var ph = msgPhoto || (msgEditing() ? (DATA.messages[msgEditKey].photo || '') : '');
+      $('msgPhotoRow').innerHTML = (ph ? '<img class="a-thumb" alt="" src="' + esc(ph) + '">' : '') +
+        '<label class="a-btn">' + (ph ? 'Change photo' : 'Add photo') + '<input type="file" accept="image/*" id="msgPhotoIn" hidden></label>' +
+        (ph ? '<button class="a-btn" type="button" id="msgPhotoDel">Remove photo</button>' : '');
+    }
+    function msgCheck() {
+      var v = $('msgText').value;
+      var m = { k: msgEditKey || '', text: v.trim(), promo: $('msgPromo').checked,
+                photo: msgPhoto || (msgEditing() ? (DATA.messages[msgEditKey].photo || '') : '') };
+      var n = 0;
+      try { n = msgPagesFor(m).length; } catch (e) { n = 0; }
+      $('msgCount').textContent = v.length + ' / 800' + (n ? ' \u00B7 ' + n + (n === 1 ? ' board page' : ' board pages') : '');
+    }
+    function resetMsgForm() {
+      msgEditKey = null; msgPhoto = null;
+      $('msgText').value = ''; $('msgPromo').checked = false;
+      $('msgSave').textContent = 'Add message';
+      $('msgCancel').hidden = true;
+      $('msgCrop').innerHTML = '';
+      renderMsgPhotoRow(); msgCheck();
+    }
+    function migrateMessage() {
+      var t = String(S().message || '').trim(), ph = S().messagePhoto;
+      if (!t && !ph) return;
+      var rec = { text: t, promo: false, addedAt: Date.now() };
+      if (ph) rec.photo = ph;
+      rootRef.child('messages').push(rec).then(function () {
+        return rootRef.child('settings').update({ message: null, messagePhoto: null });
+      }).catch(function () { });
+    }
     $('msgPhotoRow').addEventListener('change', function (ev) {
       var inp = ev.target;
       if (inp.id !== 'msgPhotoIn' || !inp.files || !inp.files[0]) return;
       var f = inp.files[0];
       inp.value = '';
       openCropper('msg', f, sidePhotoOpts('the message', 'msgCrop', function (data) {
-        return rootRef.child('settings/messagePhoto').set(data);
+        if (msgEditing()) return rootRef.child('messages/' + msgEditKey + '/photo').set(data);
+        msgPhoto = data; renderMsgPhotoRow(); msgCheck();
+        return Promise.resolve();
       }));
     });
     $('msgPhotoRow').addEventListener('click', function (ev) {
       var b = ev.target.closest && ev.target.closest('#msgPhotoDel');
       if (!b) return;
-      rootRef.child('settings/messagePhoto').remove()
-        .then(function () { toast('Photo removed.'); }).catch(function (err) { toast(failText(err), true); });
+      if (msgEditing()) {
+        rootRef.child('messages/' + msgEditKey + '/photo').remove()
+          .then(function () { toast('Photo removed.'); }).catch(function (err) { toast(failText(err), true); });
+        return;
+      }
+      msgPhoto = null; renderMsgPhotoRow(); msgCheck();
     });
+    $('msgList').addEventListener('click', function (ev) {
+      var e = ev.target.closest && ev.target.closest('[data-msgedit]');
+      if (e) {
+        var k = e.getAttribute('data-msgedit'), x = (DATA.messages || {})[k];
+        if (!x) return;
+        msgEditKey = k; msgPhoto = null;
+        $('msgText').value = x.text || '';
+        $('msgPromo').checked = !!x.promo;
+        $('msgSave').textContent = 'Save changes';
+        $('msgCancel').hidden = false;
+        renderMsgPhotoRow(); msgCheck();
+        $('msgText').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      var d = ev.target.closest && ev.target.closest('[data-msgdel]');
+      if (!d) return;
+      var dk = d.getAttribute('data-msgdel');
+      if (!confirm('Delete this message? This can\'t be undone.')) return;
+      (dk ? rootRef.child('messages/' + dk).remove()
+          : rootRef.child('settings').update({ message: null, messagePhoto: null }))
+        .then(function () { if (msgEditKey === dk) resetMsgForm(); toast('Message deleted.'); })
+        .catch(function (err) { toast(failText(err), true); });
+    });
+    $('msgCancel').addEventListener('click', resetMsgForm);
 
     $('shoutForm').addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -2440,7 +2732,15 @@
     });
 
     $('msgSave').addEventListener('click', function () {
-      rootRef.child('settings/message').set($('msgText').value.trim()).then(function () { toast('Message saved.'); })
+      var text = $('msgText').value.trim();
+      var hasPhoto = !!(msgPhoto || (msgEditing() && DATA.messages[msgEditKey].photo));
+      if (!text && !hasPhoto) { toast('Write a message first.', true); return; }
+      var rec = { text: text, promo: $('msgPromo').checked };
+      if (msgPhoto) rec.photo = msgPhoto;
+      var editing = !!msgEditing();
+      var done = editing ? rootRef.child('messages/' + msgEditKey).update(rec)
+                         : (rec.addedAt = Date.now(), rootRef.child('messages').push(rec));
+      done.then(function () { resetMsgForm(); toast(editing ? 'Message updated.' : 'Message added.'); })
         .catch(function (err) { toast(failText(err), true); });
     });
     function renderAttrib() {
@@ -2830,12 +3130,7 @@
       }).catch(function (err) { toast(failText(err), true); });
     });
 
-    $('msgClear').addEventListener('click', function () {
-      $('msgText').value = ''; $('msgText').dispatchEvent(new Event('input'));
-      if (S().messagePhoto) rootRef.child('settings/messagePhoto').remove();
-      rootRef.child('settings/message').set('').then(function () { toast('Message cleared.'); })
-        .catch(function (err) { toast(failText(err), true); });
-    });
+    $('msgClear').addEventListener('click', function () { resetMsgForm(); });
 
     /* ---------- Dutchie report parsing ---------- */
     var pending = [];

@@ -2645,7 +2645,8 @@
       var ph = msgPhoto || (msgEditing() ? (DATA.messages[msgEditKey].photo || '') : '');
       $('msgPhotoRow').innerHTML = (ph ? '<img class="a-thumb" alt="" src="' + esc(ph) + '">' : '') +
         '<label class="a-btn">' + (ph ? 'Change photo' : 'Add photo') + '<input type="file" accept="image/*" id="msgPhotoIn" hidden></label>' +
-        (ph ? '<button class="a-btn" type="button" id="msgPhotoDel">Remove photo</button>' : '');
+        (ph ? '<button class="a-btn" type="button" id="msgPhotoDel">Remove photo</button>' : '') +
+        (msgPhoto && !msgEditing() ? '<span class="a-hint" style="flex:1;min-width:150px;margin:0">Not on the board yet \u2014 click Add message below.</span>' : '');
     }
     function msgCheck() {
       var v = $('msgText').value;
@@ -2686,6 +2687,13 @@
       if (!$('msgText').value.trim()) {
         opts.grid = PHOTO_ONLY;
         opts.hint = 'With no message typed, this picture gets the board to itself. Drag and zoom to frame it. The lines show the board tiles.';
+      }
+      // Editing writes the photo straight through; a new message only holds on to
+      // it until Add message is pressed, so don't call that saved.
+      if (!msgEditing()) {
+        opts.saveLabel = 'Use this photo';
+        opts.savingToast = '';
+        opts.savedToast = 'Photo ready. Now click Add message.';
       }
       openCropper('msg', f, opts);
     });
@@ -2968,7 +2976,7 @@
           '<label for="cropBri" class="a-hint" style="margin:0">Brightness</label><input id="cropBri" type="range" min="0.5" max="1.6" step="0.01" value="1.06" style="width:280px;max-width:100%">' +
           '<label for="cropCon" class="a-hint" style="margin:0">Contrast</label><input id="cropCon" type="range" min="0.5" max="1.8" step="0.01" value="1.08" style="width:280px;max-width:100%">' +
           '<label for="cropSat" class="a-hint" style="margin:0">Color</label><input id="cropSat" type="range" min="0" max="2" step="0.01" value="1.1" style="width:280px;max-width:100%">' +
-          '<div class="a-row"><button class="a-btn primary" type="button" id="cropSave">Save photo</button><button class="a-btn" type="button" id="cropCancel">Cancel</button></div></div>';
+          '<div class="a-row"><button class="a-btn primary" type="button" id="cropSave">' + esc(opts.saveLabel || 'Save photo') + '</button><button class="a-btn" type="button" id="cropCancel">Cancel</button></div></div>';
         box.scrollIntoView({ behavior: 'smooth', block: 'center' });
         var cv = $('cropCv'), V = cv.width, W = img.naturalWidth, H = img.naturalHeight, src = img, rot = 0;
         var bri = 1.06, con = 1.08, sat = 1.1;
@@ -3047,8 +3055,9 @@
           var out = document.createElement('canvas'); out.width = out.height = 480;
           clamp(); paint(out, 480);
           var data = out.toDataURL('image/jpeg', 0.85);
-          toast('Saving photo…');
-          (opts.save ? opts.save(data) : rootRef.child('photos/' + k).set(data)).then(function () { toast('Photo saved.'); close(); })
+          if (opts.savingToast !== '') toast(opts.savingToast || 'Saving photo…');
+          (opts.save ? opts.save(data) : rootRef.child('photos/' + k).set(data))
+            .then(function () { toast(opts.savedToast || 'Photo saved.'); close(); })
             .catch(function (err) { toast(failText(err), true); });
         });
       };

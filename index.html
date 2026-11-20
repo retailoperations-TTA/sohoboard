@@ -725,6 +725,7 @@
     ['trivia', 'Trivia'],
     ['message', 'Board messages'],
     ['weather', 'SoHo weather'],
+    ['subway', 'Subway times'],
     ['records', 'Record board'],
     ['countdown', 'Green Wednesday countdown'],
     ['pet', 'Pet of the month'],
@@ -733,7 +734,9 @@
     ['nycfact', 'NYC fact']
   ];
   function panelOn(name) {
-    var key = (name === 'trivQ' || name === 'trivA') ? 'trivia' : (name === 'celebPhoto' ? 'celebrate' : name);
+    var key = (name === 'trivQ' || name === 'trivA') ? 'trivia'
+      : (name === 'celebPhoto' ? 'celebrate'
+        : (name.indexOf('subway') === 0 ? 'subway' : name));
     var p = S().panels || {};
     return p[key] !== false;
   }
@@ -1860,7 +1863,185 @@
     return framed(r);
   }
 
-  var ORDER = ['bdayToday', 'welcome', 'weather', 'onthisday', 'home', 'records', 'mis', 'uptDay', 'trivQ', 'stars', 'countdown', 'bdayToday', 'nycfact', 'spotlight', 'atvDay', 'trivA', 'pet', 'quote', 'celebrate', 'celebPhoto', 'attrib', 'bdayToday', 'uptMonth', 'nycfact', 'shout', 'atvMonth', 'bdayToday', 'message'];
+  /* ---------- subway: live arrivals from the MTA ---------- */
+  /* The MTA's realtime feeds are open and need no key, but they come back as
+  protobuf rather than JSON, so subFields below walks just the fields we need:
+  entity > trip_update > stop_time_update > arrival time. A stop ID ends in N
+  for uptown and S for downtown. To change what the board shows, edit
+  SUB_STATIONS: each line names the feed it rides on, its stop and its color.
+  Stop IDs come from the MTA's station list, and the feeds are:
+  gtfs (1-7), gtfs-ace, gtfs-bdfm, gtfs-nqrw, gtfs-g, gtfs-jz, gtfs-l, gtfs-si. */
+  var SUB_FEED = 'https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/nyct%2F';
+  var SUB_REFRESH_MS = 60 * 1000;  /* how often the feeds are re-read */
+  var SUB_SLOTS = 3;               /* how many subway turns ORDER has */
+  var SUB = {};
+  var SUB_STATIONS = [
+    {
+      name: 'BROADWAY-LAFAYETTE', note: 'BLEECKER ST  2 MIN WALK', lines: [
+        { label: 'B', color: 'O', feed: 'gtfs-bdfm', stop: 'D21' },
+        { label: 'D', color: 'O', feed: 'gtfs-bdfm', stop: 'D21' },
+        { label: 'F', color: 'O', feed: 'gtfs-bdfm', stop: 'D21' },
+        { label: 'M', color: 'O', feed: 'gtfs-bdfm', stop: 'D21' },
+        { label: '6', color: 'G', feed: 'gtfs', stop: '637' }
+      ]
+    },
+    {
+      name: 'PRINCE ST', note: '1 MIN WALK', lines: [
+        { label: 'R', color: 'Y', feed: 'gtfs-nqrw', stop: 'R22' },
+        { label: 'W', color: 'Y', feed: 'gtfs-nqrw', stop: 'R22' }
+      ]
+    },
+    {
+      name: 'SPRING ST', note: '6 AT LAFAYETTE  CE AT 6 AV', lines: [
+        { label: '6', color: 'G', feed: 'gtfs', stop: '638' },
+        { label: 'C', color: 'B', feed: 'gtfs-ace', stop: 'A33' },
+        { label: 'E', color: 'B', feed: 'gtfs-ace', stop: 'A33' }
+      ]
+    }
+  ];
+
+  function subVarint(b, st) {
+    var shift = 0, n = 0, by;
+    do { by = b[st.p++]; n += (by & 127) * Math.pow(2, shift); shift += 7; } while (by & 128 && st.p < b.length);
+    return n;
+  }
+  function subFields(b, from, to) {
+    var st = { p: from }, out = [];
+    while (st.p < to) {
+      var key = subVarint(b, st), f = Math.floor(key / 8), w = key % 8, v;
+      if (w === 0) v = subVarint(b, st);
+      else if (w === 2) { var len = subVarint(b, st); v = { s: st.p, e: st.p + len }; st.p += len; }
+      else if (w === 5) { st.p += 4; v = null; }
+      else if (w === 1) { st.p += 8; v = null; }
+      else break;
+      out.push([f, v]);
+    }
+    return out;
+  }
+  function subStr(b, r) { var s = ''; for (var i = r.s; i < r.e; i++) s += String.fromCharCode(b[i]); return s; }
+  function subWanted() {
+    var w = {}, i, j;
+    for (i = 0; i < SUB_STATIONS.length; i++) for (j = 0; j < SUB_STATIONS[i].lines.length; j++) w[SUB_STATIONS[i].lines[j].stop] = 1;
+    return w;
+  }
+  function subParse(buf) {
+    var b = new Uint8Array(buf), stops = {}, want = subWanted();
+    var ents = subFields(b, 0, b.length), i, j, k, k2, m, n, q;
+    for (i = 0; i < ents.length; i++) {
+      if (ents[i][0] !== 2 || !ents[i][1] || !ents[i][1].e) continue;
+      var ent = subFields(b, ents[i][1].s, ents[i][1].e);
+      for (j = 0; j < ent.length; j++) {
+        if (ent[j][0] !== 3 || !ent[j][1] || !ent[j][1].e) continue;
+        var tu = subFields(b, ent[j][1].s, ent[j][1].e), route = '';
+        for (k = 0; k < tu.length; k++) {
+          if (tu[k][0] === 1 && tu[k][1] && tu[k][1].e) {
+            var tr = subFields(b, tu[k][1].s, tu[k][1].e);
+            for (m = 0; m < tr.length; m++) if (tr[m][0] === 5 && tr[m][1] && tr[m][1].e) route = subStr(b, tr[m][1]);
+          }
+        }
+        if (!route) continue;
+        route = route.replace(/X$/, '');  /* the 6X and FX runs carry the same bullet */
+        for (k2 = 0; k2 < tu.length; k2++) {
+          if (tu[k2][0] !== 2 || !tu[k2][1] || !tu[k2][1].e) continue;
+          var su = subFields(b, tu[k2][1].s, tu[k2][1].e), stop = '', when = 0;
+          for (n = 0; n < su.length; n++) {
+            if (su[n][0] === 4 && su[n][1] && su[n][1].e) stop = subStr(b, su[n][1]);
+            if ((su[n][0] === 2 || su[n][0] === 3) && su[n][1] && su[n][1].e && !when) {
+              var ev = subFields(b, su[n][1].s, su[n][1].e);
+              for (q = 0; q < ev.length; q++) if (ev[q][0] === 2) when = ev[q][1];
+            }
+          }
+          if (!stop || !when || !want[stop.slice(0, -1)]) continue;
+          var sk = stop + '|' + route;
+          (stops[sk] = stops[sk] || []).push(when);
+        }
+      }
+    }
+    return stops;
+  }
+  function subFeedsFor(st) {
+    var o = [], seen = {}, i;
+    for (i = 0; i < st.lines.length; i++) { var f = st.lines[i].feed; if (!seen[f]) { seen[f] = 1; o.push(f); } }
+    return o;
+  }
+  function subRefresh(feeds, done) {
+    if (!window.fetch) return;
+    var now = Date.now(), pending = 0, got = false, i;
+    for (i = 0; i < feeds.length; i++) {
+      (function (f) {
+        var c = SUB[f];
+        if (c && now - c.at < SUB_REFRESH_MS - 5000) return;
+        pending++;
+        fetch(SUB_FEED + f).then(function (r) { return r.ok ? r.arrayBuffer() : null; }).then(function (buf) {
+          if (buf) { try { SUB[f] = { at: Date.now(), stops: subParse(buf) }; got = true; } catch (e) { } }
+        }).catch(function () { }).then(function () { pending--; if (!pending && got && done) done(); });
+      })(feeds[i]);
+    }
+  }
+  function subTimes(L, dir, nowSec) {
+    var c = SUB[L.feed];
+    if (!c) return [];
+    var arr = c.stops[L.stop + dir + '|' + L.label] || [], out = [], i;
+    for (i = 0; i < arr.length; i++) { var m = Math.round((arr[i] - nowSec) / 60); if (m >= 0 && m <= 60) out.push(m); }
+    out.sort(function (a, b) { return a - b; });
+    return out.slice(0, 2);
+  }
+  function subCell(row, col, ln, times) {
+    row[col] = chipChar(ln.color, ln.label);
+    var s = '', i;
+    if (!times.length) s = '   --';
+    else for (i = 0; i < times.length; i++) {
+      var t = times[i] === 0 ? 'NOW' : String(times[i]);
+      while (t.length < 3) t = ' ' + t;
+      s += ' ' + t;
+    }
+    return put(row, col + 1, clean(s));
+  }
+  function subStationPanel(st) {
+    var nowSec = Date.now() / 1000, lines = [], i;
+    for (i = 0; i < st.lines.length; i++) {
+      var up = subTimes(st.lines[i], 'N', nowSec), dn = subTimes(st.lines[i], 'S', nowSec);
+      /* a line with nothing running, like the B overnight, drops off the page */
+      if (!up.length && !dn.length) continue;
+      lines.push({ L: st.lines[i], up: up, dn: dn });
+    }
+    if (!lines.length) return null;  /* nothing at all, so the page skips itself */
+    var bar = [];
+    for (i = 0; i < COLS; i++) bar.push('{' + st.lines[Math.floor(i * st.lines.length / COLS)].color + '}');
+    var r = [bar, center(st.name), center(st.note || ''), blank()];
+    var hdr = blank();
+    put(hdr, 1, clean('UPTOWN'));
+    put(hdr, 15, clean('DOWNTOWN'));
+    r.push(hdr);
+    var lead = Math.max(0, Math.floor((5 - lines.length) / 2));
+    for (i = 0; i < lead; i++) r.push(blank());
+    for (i = 0; i < lines.length; i++) {
+      var row = blank();
+      subCell(row, 1, lines[i].L, lines[i].up);
+      subCell(row, 15, lines[i].L, lines[i].dn);
+      r.push(row);
+    }
+    while (r.length < ROWS - 2) r.push(blank());
+    r = r.slice(0, ROWS - 2);
+    r.push(center('MINUTES AWAY'));
+    r.push(bar);
+    return framed(r);
+  }
+  /* Each subway turn in ORDER shows its own station. With more stations than
+  turns, the extra ones come up on the next time around the board. */
+  function subwayPanel(slot, cycle) {
+    var n = SUB_STATIONS.length;
+    if (!n) return null;
+    var start = (slot + (cycle || 0) * SUB_SLOTS) % n, i;
+    for (i = 0; i < n; i++) {
+      var st = SUB_STATIONS[(start + i) % n];
+      var p = subStationPanel(st);
+      if (p) { subRefresh(subFeedsFor(st)); return p; }
+    }
+    return null;
+  }
+
+  var ORDER = ['bdayToday', 'welcome', 'weather', 'subway1', 'onthisday', 'home', 'records', 'mis', 'uptDay', 'trivQ', 'stars', 'countdown', 'bdayToday', 'subway2', 'nycfact', 'spotlight', 'atvDay', 'trivA', 'pet', 'quote', 'celebrate', 'celebPhoto', 'attrib', 'subway3', 'bdayToday', 'uptMonth', 'nycfact', 'shout', 'atvMonth', 'bdayToday', 'message'];
   function build(name, cycle) {
     if (!panelOn(name)) return null;
     switch (name) {
@@ -1884,6 +2065,7 @@
       case 'pet': return petPanel(cycle);
       case 'bdayToday': return bdayTodayPanel(cycle);
       case 'weather': return weatherPanel();
+      case 'subway1': case 'subway2': case 'subway3': return subwayPanel(+name.charAt(6) - 1, cycle);
       case 'trivQ': return triviaQPanel(cycle);
       case 'onthisday': return onThisDayPanel(cycle);
       case 'nycfact': return nycFactPanel(cycle);
@@ -2234,6 +2416,17 @@
     }
     wxRefresh();
     setInterval(wxRefresh, 15 * 60 * 1000);
+
+    function subwayTick() {
+      if (!panelOn('subway')) return;
+      var feeds = {}, list = [], i, j;
+      for (i = 0; i < SUB_STATIONS.length; i++)
+        for (j = 0; j < SUB_STATIONS[i].lines.length; j++) feeds[SUB_STATIONS[i].lines[j].feed] = 1;
+      for (var f in feeds) if (feeds.hasOwnProperty(f)) list.push(f);
+      subRefresh(list, function () { if (currentName && currentName.indexOf('subway') === 0) refreshCurrent(); });
+    }
+    subwayTick();
+    setInterval(subwayTick, SUB_REFRESH_MS);
 
     function misRefresh() { fetchMis(function () { if (currentName === 'mis') refreshCurrent(); }); }
     misRefresh();

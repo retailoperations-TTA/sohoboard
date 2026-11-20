@@ -171,6 +171,21 @@
     background-size: 82% auto, 100% 100%; background-position: center, center; background-repeat: no-repeat, no-repeat;
   }
   .t.e { font-size: calc(var(--fs, 20px) * 1.18) !important; }
+  /* Line bullets: the letter sits inside a filled circle, the way the subway
+  signs draw it, on an otherwise normal flap. */
+  .t.b {
+    background-image: radial-gradient(circle closest-side, var(--bul) 88%, transparent 89%), linear-gradient(180deg, var(--flap-hi) 0%, var(--flap) 49%, var(--flap-lo) 51%, var(--flap) 100%);
+    background-size: 100% 100%, 100% 100%; background-position: center, center; background-repeat: no-repeat, no-repeat;
+    color: #0A0A0A; font-size: calc(var(--fs, 20px) * 0.86) !important;
+  }
+  .t.bR { --bul: var(--R); }
+  .t.bO { --bul: var(--O); }
+  .t.bY { --bul: var(--Y); }
+  .t.bG { --bul: var(--G); }
+  .t.bB { --bul: var(--B); }
+  .t.bV { --bul: var(--V); }
+  .t.bW { --bul: var(--W); }
+  .t.bK { --bul: var(--K); color: var(--char); }
   /* Deal boards: letters that carry a color, and dark letters on a color chip. */
   .t.tR { color: #FF6F63; }
   .t.tO { color: #FF9A3D; }
@@ -865,12 +880,14 @@
     return r;
   }
   function edges(code) { var r = blank(); r[0] = '{' + code + '}'; r[COLS - 1] = '{' + code + '}'; return r; }
-  /* Deal-board tiles. Two kinds beyond the plain flap and the solid color chip:
+  /* Deal-board tiles. Three kinds beyond the plain flap and the solid color chip:
      "\u0002<code><char>" is a dark letter sitting on a color chip, for a headline
-     bar, and "\u0003<code><char>" is a colored letter on a normal flap, for the
-     offer half of a deal line. */
+     bar, "\u0003<code><char>" is a colored letter on a normal flap, for the
+     offer half of a deal line, and "\u0004<code><char>" is a dark letter inside a
+     filled circle, for a subway line bullet. */
   function chipChar(code, ch) { return '\u0002' + code + ch; }
   function colorChar(code, ch) { return '\u0003' + code + ch; }
+  function bulletChar(code, ch) { return '\u0004' + code + ch; }
   function bannerRow(s, code, leaves) {
     var r = blank();
     var c = txt(s, COLS - 6);
@@ -1987,7 +2004,7 @@
     return out.slice(0, 2);
   }
   function subCell(row, col, ln, times) {
-    row[col] = chipChar(ln.color, ln.label);
+    row[col] = bulletChar(ln.color, ln.label);
     var s = '', i;
     if (!times.length) s = '   --';
     else for (i = 0; i < times.length; i++) {
@@ -2155,6 +2172,11 @@
       var el = tiles[i];
       if (cell.charAt(0) === '\u0001') { photoTile(el, cell); return; }
       clearPhoto(el);
+      if (cell.charAt(0) === '\u0004') {
+        el.className = 't b b' + cell.charAt(1) + (flash ? ' f' : '');
+        el.firstChild.nodeValue = cell.slice(2) === ' ' ? '' : cell.slice(2);
+        return;
+      }
       if (cell.charAt(0) === '\u0002' || cell.charAt(0) === '\u0003') {
         var onChip = cell.charAt(0) === '\u0002', ch = cell.slice(2);
         el.className = 't ' + (onChip ? 'c' + cell.charAt(1) + ' ink' : 't' + cell.charAt(1)) + (flash ? ' f' : '');

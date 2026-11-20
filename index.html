@@ -746,7 +746,8 @@
     ['pet', 'Pet of the month'],
     ['bdayToday', 'Birthday celebration'],
     ['onthisday', 'On this day'],
-    ['nycfact', 'NYC fact']
+    ['nycfact', 'NYC fact'],
+    ['leaf', 'Leaf art']
   ];
   function panelOn(name) {
     var key = (name === 'trivQ' || name === 'trivA') ? 'trivia'
@@ -1614,6 +1615,31 @@
     return framed(r);
   }
 
+  // Leaf art: a cannabis leaf drawn in solid green flaps, nothing else on the page.
+  // # is a green flap and . is a blank one. The flaps are taller than they are wide,
+  // so the drawing looks squashed here but comes out right on the board.
+  var LEAF_ART = [
+    '.............##.............',
+    '.......#.....##.....#.......',
+    '.......##...####...##.......',
+    '.......###..####..###.......',
+    '.##.....###.####.###.....##.',
+    '..####...##.####.##...####..',
+    '....#####.##.##.##.#####....',
+    '.......###.######.###.......',
+    '..........########..........',
+    '......################......',
+    '....####.....##.....####....',
+    '.............##.............'
+  ];
+  function leafPanel() {
+    return LEAF_ART.map(function (line) {
+      var row = blank();
+      for (var c = 0; c < COLS; c++) if (line.charAt(c) === '#') row[c] = '{G}';
+      return row;
+    });
+  }
+
   // Birthday celebration: the photo inside a ring of cannabis leaves, with the
   // message on the right between rows of leaves. Only shows on its date.
   function bdayCelebsToday() {
@@ -2058,7 +2084,7 @@
     return null;
   }
 
-  var ORDER = ['bdayToday', 'welcome', 'weather', 'subway1', 'onthisday', 'home', 'records', 'mis', 'uptDay', 'trivQ', 'stars', 'countdown', 'bdayToday', 'subway2', 'nycfact', 'spotlight', 'atvDay', 'trivA', 'pet', 'quote', 'celebrate', 'celebPhoto', 'attrib', 'subway3', 'bdayToday', 'uptMonth', 'nycfact', 'shout', 'atvMonth', 'bdayToday', 'message'];
+  var ORDER = ['bdayToday', 'welcome', 'weather', 'subway1', 'onthisday', 'home', 'records', 'mis', 'uptDay', 'trivQ', 'stars', 'countdown', 'bdayToday', 'subway2', 'nycfact', 'spotlight', 'atvDay', 'trivA', 'pet', 'quote', 'leaf', 'celebrate', 'celebPhoto', 'attrib', 'subway3', 'bdayToday', 'uptMonth', 'nycfact', 'shout', 'atvMonth', 'bdayToday', 'message'];
   function build(name, cycle) {
     if (!panelOn(name)) return null;
     switch (name) {
@@ -2087,6 +2113,7 @@
       case 'onthisday': return onThisDayPanel(cycle);
       case 'nycfact': return nycFactPanel(cycle);
       case 'trivA': return triviaAPanel(cycle);
+      case 'leaf': return leafPanel();
     }
     return null;
   }
